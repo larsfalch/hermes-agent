@@ -23,6 +23,7 @@ import logging
 import os
 import re
 import shlex
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -371,6 +372,67 @@ class GatewaySlashCommandsMixin:
         ]
 
         return "\n".join(lines)
+
+    def _maintenance_jobs_renderer(self, job_name: str) -> str:
+        """Render a maintenance-jobs status report via the project runner.
+
+        The gateway is long-lived; importing maintenance_jobs in-process keeps
+        stale modules in sys.modules after project changes. Use the same
+        subprocess path as the scheduled no-agent jobs so /claude, /codex, and
+        cron output stay aligned.
+        """
+        project = Path.home() / "projects" / "maintenance-jobs"
+        runner = project / "scripts" / "run_job.py"
+        result = subprocess.run(
+            ["python3", str(runner), job_name],
+            cwd=str(project),
+            capture_output=True,
+            text=True,
+            timeout=35,
+            check=False,
+        )
+        output = (result.stdout or "").strip()
+        if result.returncode != 0:
+            error = (result.stderr or output or f"exit {result.returncode}").strip()
+            raise RuntimeError(error)
+        return output
+
+    async def _send_literal_status_reply(self, event: MessageEvent, text: str) -> str:
+        """Send pre-rendered status text without rich conversion, then suppress normal reply."""
+        source = event.source
+        adapter = self.adapters.get(source.platform) if source else None
+        if adapter is None:
+            return text
+
+        metadata = {"disable_rich_messages": True}
+        if getattr(source, "thread_id", None):
+            metadata["thread_id"] = source.thread_id
+
+        result = await adapter.send(
+            source.chat_id,
+            text,
+            reply_to=event.message_id,
+            metadata=metadata,
+        )
+        if not result.success:
+            return f"❌ Status delivery failed: {result.error or 'unknown error'}"
+        return ""
+
+    async def _handle_claude_command(self, event: MessageEvent) -> str:
+        """Handle /claude — show Claude Code subscription usage."""
+        try:
+            text = await asyncio.to_thread(self._maintenance_jobs_renderer, "claude-status")
+        except Exception as exc:
+            return f"❌ Claude usage lookup failed: {type(exc).__name__}: {exc}"
+        return await self._send_literal_status_reply(event, text)
+
+    async def _handle_codex_command(self, event: MessageEvent) -> str:
+        """Handle /codex — show OpenAI Codex subscription usage."""
+        try:
+            text = await asyncio.to_thread(self._maintenance_jobs_renderer, "codex-status")
+        except Exception as exc:
+            return f"❌ Codex usage lookup failed: {type(exc).__name__}: {exc}"
+        return await self._send_literal_status_reply(event, text)
 
     async def _handle_whoami_command(self, event: MessageEvent) -> str:
         """Handle /whoami — show the user's slash command access on this scope.

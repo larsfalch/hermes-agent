@@ -11676,6 +11676,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 return ("Agent is running — wait or /stop first, then "
                         "change runtime.")
 
+            if _cmd_def_inner and _cmd_def_inner.name == "claude":
+                return await self._handle_claude_command(event)
+
+            if _cmd_def_inner and _cmd_def_inner.name == "codex":
+                return await self._handle_codex_command(event)
+
             # /approve and /deny must bypass the running-agent interrupt path.
             # The agent thread is blocked on a threading.Event inside
             # tools/approval.py — sending an interrupt won't unblock it.
@@ -12185,6 +12191,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         if canonical == "codex-runtime":
             return await self._handle_codex_runtime_command(event)
+
+        if canonical == "claude":
+            return await self._handle_claude_command(event)
+
+        if canonical == "codex":
+            return await self._handle_codex_command(event)
 
         if canonical == "personality":
             return await self._handle_personality_command(event)

@@ -1628,6 +1628,8 @@ class TelegramAdapter(BasePlatformAdapter):
     def _should_attempt_rich(
         self, content: str, metadata: Optional[Dict[str, Any]] = None
     ) -> bool:
+        if (metadata or {}).get("disable_rich_messages"):
+            return False
         return bool(
             not (metadata or {}).get("expect_edits")
             and self._rich_eligible(content)
@@ -1646,6 +1648,8 @@ class TelegramAdapter(BasePlatformAdapter):
         ``editMessageText`` ``rich_message`` parameter (see
         :meth:`_try_edit_rich`), so no fresh re-send / delete is needed.
         """
+        if (metadata or {}).get("disable_rich_messages"):
+            return False
         return False
 
     def streaming_overflow_limit(self) -> Optional[int]:
@@ -4360,7 +4364,7 @@ class TelegramAdapter(BasePlatformAdapter):
                     return rich_result
 
             # Format and split message if needed
-            formatted = self.format_message(content)
+            formatted = self.format_message(content, metadata=metadata)
             chunks = self.truncate_message(
                 formatted, self.MAX_MESSAGE_LENGTH, len_fn=utf16_len,
             )
@@ -4762,7 +4766,7 @@ class TelegramAdapter(BasePlatformAdapter):
                     self._last_overflow_preview[_preview_key] = content
                 return SendResult(success=True, message_id=message_id)
 
-            formatted = self.format_message(content)
+            formatted = self.format_message(content, metadata=metadata)
             try:
                 await self._bot.edit_message_text(
                     chat_id=normalize_telegram_chat_id(chat_id),
@@ -7480,7 +7484,7 @@ class TelegramAdapter(BasePlatformAdapter):
             )
             return {"name": str(chat_id), "type": "dm", "error": str(e)}
 
-    def format_message(self, content: str) -> str:
+    def format_message(self, content: str, metadata: Optional[Dict[str, Any]] = None) -> str:
         """
         Convert standard markdown to Telegram MarkdownV2 format.
 
@@ -7491,6 +7495,9 @@ class TelegramAdapter(BasePlatformAdapter):
         """
         if not content:
             return content
+
+        if (metadata or {}).get("disable_rich_messages"):
+            return _escape_mdv2(content)
 
         placeholders: dict = {}
         counter = [0]
