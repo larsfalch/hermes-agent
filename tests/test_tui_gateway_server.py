@@ -4835,6 +4835,80 @@ def test_ensure_session_db_row_defaults_desktop_to_no_workspace(monkeypatch, tmp
     ]
 
 
+def test_project_switch_persists_workspace_and_tree_groups_explicit_project(monkeypatch, tmp_path):
+    """project_switch must move the active desktop session into the named Project."""
+    from hermes_cli import projects_db as pdb
+    from hermes_state import SessionDB
+    from tools import project_tools
+
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    workspace = tmp_path / "retro-gaming"
+    workspace.mkdir()
+    token = set_hermes_home_override(home)
+    db = SessionDB(db_path=home / "state.db")
+    previous_sessions = dict(server._sessions)
+    server._sessions.clear()
+
+    try:
+        with pdb.connect_closing() as conn:
+            project_id = pdb.create_project(
+                conn,
+                name="Retro Gaming Library",
+                slug="retro-gaming-library",
+                folders=[str(workspace)],
+                primary_path=str(workspace),
+            )
+
+        db.create_session("stored-row", "desktop", session_key="active-key")
+        db.append_message("stored-row", "user", "Game library curation")
+
+        monkeypatch.setattr(server, "_get_db", lambda: db)
+        monkeypatch.setattr(server, "_emit", lambda *args, **kwargs: None)
+        monkeypatch.setattr(server, "_persist_session_git_meta", lambda *args, **kwargs: None)
+        monkeypatch.setattr(server, "_resolve_cwd_git", lambda _cwd: None)
+
+        server._sessions["live-sid"] = {
+            "agent": None,
+            "session_key": "active-key",
+            "history": [],
+            "history_lock": threading.Lock(),
+            "cwd": "",
+        }
+        project_tools.set_project_workspace_callback(server._apply_project_workspace)
+
+        switched = json.loads(
+            project_tools.project_switch("retro-gaming-library", task_id="active-key")
+        )
+
+        assert switched["success"] is True
+        assert server._sessions["live-sid"]["cwd"] == str(workspace)
+        assert server._sessions["live-sid"]["explicit_cwd"] is True
+        assert db.get_session("stored-row")["cwd"] == str(workspace)
+
+        response = server._methods["projects.project_sessions"](
+            "r1",
+            {"project_id": project_id, "session_limit": 50},
+        )
+
+        project = response["result"]["project"]
+        assert project["id"] == project_id
+        assert project["sessionCount"] == 1
+        sessions = [
+            session
+            for repo in project["repos"]
+            for group in repo["groups"]
+            for session in group["sessions"]
+        ]
+        assert [session["id"] for session in sessions] == ["stored-row"]
+    finally:
+        project_tools.set_project_workspace_callback(None)
+        server._sessions.clear()
+        server._sessions.update(previous_sessions)
+        db.close()
+        reset_hermes_home_override(token)
+
+
 def test_ensure_session_db_row_persists_session_model_override(monkeypatch):
     """The session's composer pick (model + effort + fast) must own the DB row.
 

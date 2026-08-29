@@ -217,6 +217,30 @@ def test_non_git_cwd_preserves_legacy_workspace_grouping():
     assert tree["scoped_session_ids"] == [legacy["id"]]
 
 
+def test_explicit_project_folder_claims_matching_session_for_desktop_tree():
+    """A switched session belongs under its named Project, not only Pinned."""
+    session = _session("/home/hermes/projects/retro-gaming", title="Game library curation")
+    project = _project(
+        "p_89e06895",
+        "Retro Gaming Library",
+        ["/home/hermes/projects/retro-gaming"],
+    )
+
+    tree = pt.build_tree(
+        [project],
+        [session],
+        [],
+        resolve=lambda _cwd: None,
+        hydrate=True,
+    )
+
+    explicit = next(p for p in tree["projects"] if p["id"] == "p_89e06895")
+    assert explicit["sessionCount"] == 1
+    assert [s["id"] for s in _sessions_of(explicit)] == [session["id"]]
+    assert tree["scoped_session_ids"] == [session["id"]]
+    assert _home(tree) is None
+
+
 def test_non_git_windows_cwd_preserves_legacy_workspace_grouping():
     cwd = r"C:\Users\alice\workspace\notes"
     legacy = _session(cwd)

@@ -4755,17 +4755,45 @@ class SessionDB:
         repo_root = (git_repo_root or "").strip()
 
         sets = ["cwd = ?"]
-        params: List[Any] = [cwd]
+        set_values: List[Any] = [cwd]
         if branch:
             sets.append("git_branch = ?")
-            params.append(branch)
+            set_values.append(branch)
         if repo_root:
             sets.append("git_repo_root = ?")
-            params.append(repo_root)
-        params.append(session_id)
+            set_values.append(repo_root)
 
         def _do(conn):
-            conn.execute(f"UPDATE sessions SET {', '.join(sets)} WHERE id = ?", params)
+            cursor = conn.execute(
+                f"UPDATE sessions SET {', '.join(sets)} WHERE id = ?",
+                [*set_values, session_id],
+            )
+            if cursor.rowcount:
+                return
+
+            # GUI/gateway callbacks sometimes carry the durable session_key
+            # rather than the row id. Update only the newest row for that key:
+            # gateway lineages may retain older rows with the same session_key,
+            # and a workspace move belongs to the active tip, not every ancestor.
+            conn.execute(
+                f"""UPDATE sessions
+                       SET {', '.join(sets)}
+                     WHERE id = (
+                         SELECT s.id
+                           FROM sessions AS s
+                           LEFT JOIN (
+                               SELECT session_id, MAX(timestamp) AS last_message_at
+                                 FROM messages
+                                GROUP BY session_id
+                           ) AS m ON m.session_id = s.id
+                          WHERE s.session_key = ?
+                          ORDER BY COALESCE(m.last_message_at, s.started_at, 0) DESC,
+                                   s.started_at DESC,
+                                   s.id DESC
+                          LIMIT 1
+                     )""",
+                [*set_values, session_id],
+            )
 
         self._execute_write(_do)
 

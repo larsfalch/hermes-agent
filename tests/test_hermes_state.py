@@ -139,6 +139,33 @@ class TestSessionLifecycle:
         assert session["cwd"] == "/work/repo"
         assert session["git_branch"] == "pets-feature"
 
+    def test_update_session_cwd_can_target_latest_row_by_session_key(self, db):
+        """GUI tool callbacks may carry session_key instead of the row id.
+
+        Only the newest matching row moves; older rows with the same gateway key
+        are historical ancestors and must not be rewritten.
+        """
+        db.create_session("old-row", "desktop", session_key="live-key")
+        db.create_session("new-row", "desktop", session_key="live-key")
+        def _set_ordering(conn):
+            conn.execute(
+                "UPDATE sessions SET started_at = ? WHERE id = ?",
+                (1, "old-row"),
+            )
+            conn.execute(
+                "UPDATE sessions SET started_at = ? WHERE id = ?",
+                (2, "new-row"),
+            )
+
+        db._execute_write(_set_ordering)
+
+        db.update_session_cwd("live-key", "/work/repo", git_branch="pets-feature")
+
+        assert db.get_session("old-row")["cwd"] is None
+        newest = db.get_session("new-row")
+        assert newest["cwd"] == "/work/repo"
+        assert newest["git_branch"] == "pets-feature"
+
     def test_child_session_inherits_cwd_and_git_repo_root_from_parent(self, db):
         """A parent_session_id child born without cwd/git_repo_root (e.g. the
         compression-fork path) must inherit both from its parent, so it
