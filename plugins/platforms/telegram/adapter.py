@@ -1304,6 +1304,8 @@ class TelegramAdapter(BasePlatformAdapter):
             and self._rich_content_ok(content))
 
     def _should_attempt_rich(self, content: str, metadata: Optional[Dict[str, Any]] = None) -> bool:
+        if (metadata or {}).get("disable_rich_messages"):
+            return False
         return bool(not (metadata or {}).get("expect_edits") and self._rich_eligible(content))
 
     def prefers_fresh_final_streaming(self, content: str, metadata: Optional[Dict[str, Any]] = None) -> bool:
@@ -1318,6 +1320,8 @@ class TelegramAdapter(BasePlatformAdapter):
         formatter permanently turns pipe tables into bullet lists.
         """
         metadata = metadata or {}
+        if metadata.get("disable_rich_messages"):
+            return False
         if not (metadata.get("telegram_dm_topic_reply_fallback") or self._metadata_direct_messages_topic_id(metadata)):
             return False
         return self._rich_eligible(content)
@@ -3421,7 +3425,7 @@ class TelegramAdapter(BasePlatformAdapter):
                     if rich_result.success:
                         await self._retrigger_typing(chat_id, metadata)
                     return rich_result
-            chunks = self.truncate_message(self.format_message(content), self.MAX_MESSAGE_LENGTH, len_fn=utf16_len)
+            chunks = self.truncate_message(self.format_message(content, metadata=metadata), self.MAX_MESSAGE_LENGTH, len_fn=utf16_len)
             if len(chunks) > 1:
                 # truncate_message appends a raw " (1/2)" suffix; escape the MarkdownV2-special parentheses.
                 chunks = [
@@ -3557,7 +3561,7 @@ class TelegramAdapter(BasePlatformAdapter):
                     self._last_overflow_preview[_preview_key] = content
                 return SendResult(success=True, message_id=message_id)
             await self._edit_markdown_or_plain(
-                chat_id, message_id, self.format_message(content), _strip_mdv2(content) if content else content,
+                chat_id, message_id, self.format_message(content, metadata=metadata), _strip_mdv2(content) if content else content,
                 "[%s] MarkdownV2 edit failed, falling back to plain text: %s")
             return SendResult(success=True, message_id=message_id)
         except Exception as e:
@@ -5121,11 +5125,13 @@ class TelegramAdapter(BasePlatformAdapter):
                 e), exc_info=True)
             return {"name": str(chat_id), "type": "dm", "error": str(e)}
 
-    def format_message(self, content: str) -> str:
+    def format_message(self, content: str, metadata: Optional[Dict[str, Any]] = None) -> str:
         """Convert standard markdown to Telegram MarkdownV2: code is stashed behind placeholders first (never
         modified), markdown constructs become MarkdownV2 syntax, everything else is escaped."""
         if not content:
             return content
+        if (metadata or {}).get("disable_rich_messages"):
+            return _escape_mdv2(content)
         placeholders: dict = {}
         counter = [0]
 
